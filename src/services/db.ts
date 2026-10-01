@@ -310,6 +310,20 @@ class RexDatabase {
         this.notifySubscribers(event.data);
       };
     }
+
+    if (supabase) {
+      try {
+        const sbChannel = supabase.channel('rex-realtime-room');
+        sbChannel
+          .on('broadcast', { event: 'rex_sync' }, ({ payload }) => {
+            this.loadFromStorage();
+            this.notifySubscribers(payload);
+          })
+          .subscribe();
+      } catch (err) {
+        console.warn('Supabase Realtime subscription note:', err);
+      }
+    }
   }
 
   public subscribeRealtime(callback: (event: RealtimePayload) => void) {
@@ -333,6 +347,15 @@ class RexDatabase {
     };
     if (realtimeChannel) {
       realtimeChannel.postMessage(event);
+    }
+    if (supabase) {
+      try {
+        supabase.channel('rex-realtime-room').send({
+          type: 'broadcast',
+          event: 'rex_sync',
+          payload: event
+        });
+      } catch (e) {}
     }
     this.notifySubscribers(event);
   }
@@ -474,6 +497,29 @@ class RexDatabase {
 
     this.saveExchanges();
     this.broadcast('OFFER_COUNTERED', req);
+    return req;
+  }
+
+  public acceptCounterOffer(requestId: string): ExchangeRequest {
+    const req = this.exchangeRequests.find(r => r.id === requestId);
+    if (!req) throw new Error('Request not found');
+
+    req.status = 'ACCEPTED';
+    if (req.counter_price) {
+      req.offered_price = req.counter_price;
+    }
+    req.requester_confirmed = true;
+    req.updated_at = new Date().toISOString();
+
+    const resource = this.getResourceById(req.resource_id);
+    if (resource) {
+      const locations = MEETUP_LOCATIONS[resource.institution_id] || ['Central Campus Library Foyer'];
+      req.meetup_location_name = locations[0];
+      req.meetup_time = '5:30 PM (Handover Window)';
+    }
+
+    this.saveExchanges();
+    this.broadcast('OFFER_ACCEPTED', req);
     return req;
   }
 

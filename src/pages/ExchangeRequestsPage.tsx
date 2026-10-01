@@ -63,6 +63,12 @@ export const ExchangeRequestsPage: React.FC<ExchangeRequestsPageProps> = ({
     refreshRequests();
   };
 
+  const handleAcceptCounter = (reqId: string) => {
+    const updated = db.acceptCounterOffer(reqId);
+    refreshRequests();
+    onExchangeConfirmed(updated);
+  };
+
   const handleDecline = (reqId: string) => {
     db.declineOffer(reqId);
     refreshRequests();
@@ -338,9 +344,23 @@ export const ExchangeRequestsPage: React.FC<ExchangeRequestsPageProps> = ({
                         )}
 
                         {req.status === 'COUNTERED' && (
-                          <span className="px-2.5 py-1 rounded-md bg-blue-500/20 text-blue-300 border border-blue-500/40 font-mono">
-                            Owner countered with ₹{req.counter_price}
-                          </span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="px-2.5 py-1 rounded-md bg-blue-500/20 text-blue-300 border border-blue-500/40 font-mono">
+                              Owner countered with ₹{req.counter_price}
+                            </span>
+                            <button
+                              onClick={() => handleAcceptCounter(req.id)}
+                              className="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-charcoal-950 font-bold font-mono text-xs transition-colors"
+                            >
+                              [ ACCEPT COUNTER OFFER (₹{req.counter_price}) ]
+                            </button>
+                            <button
+                              onClick={() => handleDecline(req.id)}
+                              className="px-2.5 py-1 rounded-lg bg-charcoal-900 border border-red-500/30 text-red-400 font-mono text-xs hover:bg-red-500/20 transition-colors"
+                            >
+                              [ DECLINE ]
+                            </button>
+                          </div>
                         )}
 
                         {req.status === 'MEETUP_CONFIRMED' && (
