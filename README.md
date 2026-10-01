@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# REX - India's Student Exchange Agent
 
-## Getting Started
+## Backend / Database Setup (Supabase)
 
-First, run the development server:
+REX uses Supabase for its backend, including PostgreSQL, Row Level Security (RLS), and Realtime features.
 
+### Prerequisites
+1. Create a [Supabase](https://supabase.com) project.
+2. Link your local project:
+   `npx supabase link --project-ref <your-project-ref>`
+3. Set your environment variables in `.env.local` (see `.env.example`):
+   ```
+   NEXT_PUBLIC_SUPABASE_URL=
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=
+   ```
+
+### Schema & Migrations
+To apply the database schema, RLS policies, and seed data:
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npx supabase db push
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Authentication
+REX uses Supabase Auth (Email/Password). 
+During the sign-up flow, users must select an institution which is then mapped to their `public.profiles` entry.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Row Level Security (RLS)
+RLS is strictly enforced on all tables. 
+Users can only modify their own resources and participate in exchanges where they are either the requester or the resource owner. All queries implicitly use `auth.uid()`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Realtime Configuration
+Supabase Realtime is enabled on the `exchange_requests` table. Subscriptions are scoped to individual exchanges, ensuring users only receive updates they are authorized to see based on RLS policies.
 
-## Learn More
+### Demo Accounts
+For demonstration purposes, the seed data includes:
+- Aarav Sharma (aarav@demo.rex / password123) - SRM Institute
+- Vikram Patel (vikram@demo.rex / password123) - IIT Madras
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Supabase Edge Functions & Gemini Integration
+If you intend to deploy agentic logic (like Gemini intent extraction) inside Supabase Edge Functions:
+1. Initialize the edge function: `npx supabase functions new gemini-agent`
+2. Securely set the `GEMINI_API_KEY` for the function:
+   ```bash
+   npx supabase secrets set GEMINI_API_KEY="your-secret-key"
+   ```
+*Note: Never place `GEMINI_API_KEY` inside `.env.local` or commit it to version control.*
