@@ -1,30 +1,31 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Bot, 
-  Map, 
-  Search, 
-  Compass, 
-  PlusCircle, 
-  Inbox, 
-  Clock, 
-  User, 
-  Sparkles, 
-  ShieldCheck, 
+import {
+  Bot,
+  Map,
+  Search,
+  Compass,
+  PlusCircle,
+  Inbox,
+  Clock,
+  User,
+  Sparkles,
+  ShieldCheck,
   Database,
   ArrowRightLeft,
   ChevronDown
 } from 'lucide-react';
 import { Profile, Institution } from '../types';
 import { db, RealtimePayload } from '../services/db';
+import { backendAdapter } from '../services/dataAdapter';
 
-export type NavTab = 
-  | 'home' 
-  | 'ask_rex' 
-  | 'discover' 
-  | 'network' 
-  | 'list_resource' 
-  | 'requests' 
-  | 'activity' 
+export type NavTab =
+  | 'home'
+  | 'ask_rex'
+  | 'discover'
+  | 'network'
+  | 'list_resource'
+  | 'requests'
+  | 'activity'
   | 'profile';
 
 interface NavbarProps {
@@ -67,9 +68,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   return (
     <header className="sticky top-0 z-50 w-full border-b border-white/[0.08] bg-[#07080B]/90 backdrop-blur-xl">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
-        
+
         {/* Brand / Logo */}
-        <div 
+        <div
           onClick={() => onNavigate('home')}
           className="flex items-center gap-3 cursor-pointer group shrink-0 select-none"
         >
@@ -184,7 +185,21 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Right Section: User & Demo Controls */}
         <div className="flex items-center gap-2">
-          
+
+          {/* Environment Status Badge */}
+          <div
+            onClick={onOpenSettings}
+            title={backendAdapter.isCloudConfigured()
+              ? "Running in CLOUD MODE with shared Supabase database & Realtime"
+              : "Running in DEMO MODE with browser localStorage & BroadcastChannel tab sync"}
+            className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border font-mono text-[10px] cursor-pointer hover:border-white/20 transition-colors bg-charcoal-900 border-white/10"
+          >
+            <span className={`w-2 h-2 rounded-full ${backendAdapter.isCloudConfigured() ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+            <span className={backendAdapter.isCloudConfigured() ? 'text-emerald-400 font-bold' : 'text-amber-300 font-bold'}>
+              {backendAdapter.isCloudConfigured() ? 'CLOUD MODE' : 'DEMO MODE'}
+            </span>
+          </div>
+
           {/* Seed Demo Button for Judges */}
           <button
             onClick={onSeedDemo}

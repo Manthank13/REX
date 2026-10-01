@@ -1,9 +1,9 @@
-import { 
-  Institution, 
-  Profile, 
-  Resource, 
-  ExchangeRequest, 
-  ExchangeMessage, 
+import {
+  Institution,
+  Profile,
+  Resource,
+  ExchangeRequest,
+  ExchangeMessage,
   ExchangeStatus,
   ExchangeType,
   ResourceCondition
@@ -12,13 +12,17 @@ import { AISHE_INSTITUTIONS, MEETUP_LOCATIONS } from '../data/institutionsData';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 // Supabase configuration accessor
-const getSupabaseConfig = () => {
-  const url = localStorage.getItem('rex_supabase_url') || (import.meta as any).env?.VITE_SUPABASE_URL || '';
-  const key = localStorage.getItem('rex_supabase_anon_key') || (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+export const getSupabaseConfig = () => {
+  const url = typeof localStorage !== 'undefined'
+    ? localStorage.getItem('rex_supabase_url') || (import.meta as any).env?.VITE_SUPABASE_URL || ''
+    : (import.meta as any).env?.VITE_SUPABASE_URL || '';
+  const key = typeof localStorage !== 'undefined'
+    ? localStorage.getItem('rex_supabase_anon_key') || (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || ''
+    : (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
   return { url, key };
 };
 
-let supabase: SupabaseClient | null = null;
+export let supabase: SupabaseClient | null = null;
 const { url: initialUrl, key: initialKey } = getSupabaseConfig();
 if (initialUrl && initialKey) {
   try {
@@ -29,11 +33,11 @@ if (initialUrl && initialKey) {
 }
 
 // Cross-tab real-time broadcast channel
-const realtimeChannel = typeof window !== 'undefined' && 'BroadcastChannel' in window 
+const realtimeChannel = typeof window !== 'undefined' && 'BroadcastChannel' in window
   ? new BroadcastChannel('rex_realtime_events')
   : null;
 
-export type RealtimeEventType = 
+export type RealtimeEventType =
   | 'NEW_EXCHANGE_REQUEST'
   | 'OFFER_ACCEPTED'
   | 'OFFER_COUNTERED'
@@ -271,6 +275,11 @@ class RexDatabase {
 
   private loadFromStorage() {
     try {
+      if (typeof localStorage === 'undefined') {
+        this.resources = [...INITIAL_DEMO_RESOURCES];
+        return;
+      }
+
       const storedRes = localStorage.getItem('rex_resources_db');
       if (storedRes) {
         this.resources = JSON.parse(storedRes);
@@ -295,11 +304,15 @@ class RexDatabase {
   }
 
   private saveResources() {
-    localStorage.setItem('rex_resources_db', JSON.stringify(this.resources));
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('rex_resources_db', JSON.stringify(this.resources));
+    }
   }
 
   private saveExchanges() {
-    localStorage.setItem('rex_exchanges_db', JSON.stringify(this.exchangeRequests));
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('rex_exchanges_db', JSON.stringify(this.exchangeRequests));
+    }
   }
 
   private initRealtimeListener() {

@@ -40,7 +40,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-charcoal-950/80 backdrop-blur-md animate-fade-in">
       <div className="relative w-full max-w-md glass-panel rounded-2xl p-6 border-white/10 shadow-2xl">
-        
+
         <button
           onClick={onClose}
           className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5"
@@ -119,7 +119,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         <div className="p-3 rounded-xl bg-charcoal-900 border border-white/5 text-[11px] text-slate-400 mb-5 flex items-start gap-2">
           <Shield className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
           <span>
-            Keys are saved in local browser storage only. Cross-tab BroadcastChannel real-time negotiation is fully active.
+            By default, REX runs in <strong>DEMO MODE</strong> using browser local storage and cross-tab BroadcastChannel sync. Connecting Supabase switches the agent to <strong>CLOUD MODE</strong> using shared PostgreSQL records and Supabase Realtime.
           </span>
         </div>
 

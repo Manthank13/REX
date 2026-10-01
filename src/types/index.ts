@@ -1,13 +1,13 @@
 export type ExchangeType = 'SELL' | 'EXCHANGE' | 'LEND' | 'GIVE_AWAY';
 export type ResourceCondition = 'Like New' | 'Excellent' | 'Good' | 'Fair';
 export type ResourceStatus = 'ACTIVE' | 'RESERVED' | 'EXCHANGED' | 'UNAVAILABLE';
-export type ExchangeStatus = 
-  | 'PENDING' 
-  | 'NEGOTIATING' 
-  | 'COUNTERED' 
-  | 'ACCEPTED' 
-  | 'DECLINED' 
-  | 'MEETUP_CONFIRMED' 
+export type ExchangeStatus =
+  | 'PENDING'
+  | 'NEGOTIATING'
+  | 'COUNTERED'
+  | 'ACCEPTED'
+  | 'DECLINED'
+  | 'MEETUP_CONFIRMED'
   | 'COMPLETED';
 
 export interface Institution {
@@ -98,11 +98,19 @@ export interface MeetupLocation {
 }
 
 export interface AgentIntent {
+  item?: string;
+  category?: string;
   resource_type: string;
   keywords: string[];
   max_price?: number;
+  condition?: string | null;
+  purpose?: string | null;
   duration?: string;
+  availability_start?: string;
+  availability_end?: string;
   preferred_institution?: string;
+  location_preference?: 'same_college' | 'nearby_colleges' | 'city' | 'state' | 'national' | string;
+  search_expansion_allowed?: boolean;
   urgency?: 'urgent' | 'flexible' | null;
   availability?: string;
   raw_query: string;

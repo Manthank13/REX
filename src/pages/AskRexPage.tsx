@@ -1,30 +1,30 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Search, 
-  ArrowRight, 
-  Sparkles, 
-  Bot, 
-  CheckCircle2, 
-  AlertCircle, 
-  MapPin, 
-  Clock, 
-  ShieldCheck, 
-  ChevronDown, 
-  ChevronUp, 
-  Compass, 
-  Check, 
-  Loader2, 
+import {
+  Search,
+  ArrowRight,
+  Sparkles,
+  Bot,
+  CheckCircle2,
+  AlertCircle,
+  MapPin,
+  Clock,
+  ShieldCheck,
+  ChevronDown,
+  ChevronUp,
+  Compass,
+  Check,
+  Loader2,
   Radio,
   ExternalLink,
   MessageSquare
 } from 'lucide-react';
-import { 
-  Profile, 
-  Institution, 
-  SearchCandidate, 
-  AgentIntent, 
+import {
+  Profile,
+  Institution,
+  SearchCandidate,
+  AgentIntent,
   DecisionTraceEvent,
-  Resource 
+  Resource
 } from '../types';
 import { extractIntent, executeAgentSearch } from '../services/agentEngine';
 import { RexMap } from '../components/RexMap';
@@ -74,7 +74,7 @@ export const AskRexPage: React.FC<AskRexPageProps> = ({
     setAgentStep(1);
 
     // Step 1 - 3: Execute search pipeline with real stage expansion
-    const { bestMatch: match, allCandidates, finalStage: stage, explanation: exp } = 
+    const { bestMatch: match, allCandidates, finalStage: stage, explanation: exp } =
       await executeAgentSearch(intent, currentUser, (evt) => {
         setDecisionTrace(prev => [...prev, evt]);
       });
@@ -105,7 +105,7 @@ export const AskRexPage: React.FC<AskRexPageProps> = ({
 
   return (
     <div className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-10 animate-fade-in space-y-8">
-      
+
       {/* Top Header */}
       <div className="text-center max-w-3xl mx-auto">
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-mono text-xs font-semibold mb-3">
@@ -158,7 +158,7 @@ export const AskRexPage: React.FC<AskRexPageProps> = ({
       {/* Agent Activity Timeline (When Running or Completed) */}
       {(isRunning || bestMatch) && (
         <div className="glass-panel rounded-2xl p-6 border-white/10 shadow-2xl animate-fade-in">
-          
+
           <div className="flex items-center justify-between pb-3 mb-5 border-b border-white/10">
             <div className="flex items-center gap-2.5">
               <Bot className="w-5 h-5 text-emerald-400" />
@@ -175,9 +175,35 @@ export const AskRexPage: React.FC<AskRexPageProps> = ({
             </div>
           </div>
 
+          {/* Structured Intent Badges */}
+          {extractedIntent && (
+            <div className="flex flex-wrap items-center gap-2 mb-4 p-2.5 rounded-xl bg-charcoal-900 border border-white/5 text-[11px] font-mono">
+              <span className="text-slate-400">Extracted Intent:</span>
+              <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
+                Item: {extractedIntent.item || extractedIntent.resource_type}
+              </span>
+              {extractedIntent.category && (
+                <span className="px-2 py-0.5 rounded bg-white/5 text-slate-300 border border-white/10">
+                  Category: {extractedIntent.category}
+                </span>
+              )}
+              {extractedIntent.duration && (
+                <span className="px-2 py-0.5 rounded bg-white/5 text-slate-300 border border-white/10">
+                  Duration: {extractedIntent.duration}
+                </span>
+              )}
+              <span className="px-2 py-0.5 rounded bg-white/5 text-slate-300 border border-white/10">
+                Budget: {extractedIntent.max_price ? `₹${extractedIntent.max_price}` : 'Flexible'}
+              </span>
+              <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                Expansion: {extractedIntent.search_expansion_allowed !== false ? 'Allowed (Nearby Campuses)' : 'College Only'}
+              </span>
+            </div>
+          )}
+
           {/* Animated Timeline Steps */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            
+
             {/* Left: Real-time Multi-Stage Progression */}
             <div className="space-y-2.5 text-xs font-mono">
               <div className="flex items-center gap-3 p-2.5 rounded-xl bg-charcoal-900 border border-white/5 text-slate-200">
@@ -218,7 +244,7 @@ export const AskRexPage: React.FC<AskRexPageProps> = ({
             {/* Right: Collapsible REX Decision Trace */}
             <div className="bg-charcoal-950 rounded-xl p-4 border border-white/10 flex flex-col justify-between">
               <div>
-                <div 
+                <div
                   onClick={() => setShowTrace(!showTrace)}
                   className="flex items-center justify-between text-xs font-mono font-bold text-slate-300 cursor-pointer pb-2 mb-2 border-b border-white/5"
                 >
@@ -263,7 +289,7 @@ export const AskRexPage: React.FC<AskRexPageProps> = ({
       {/* Main Match Result View (Page 23 from spec) */}
       {bestMatch && (
         <div className="space-y-6 animate-fade-in">
-          
+
           <div className="flex items-center justify-between">
             <div className="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-mono text-xs font-bold uppercase tracking-wider">
               <Sparkles className="w-4 h-4" />
@@ -275,7 +301,7 @@ export const AskRexPage: React.FC<AskRexPageProps> = ({
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            
+
             {/* Left: Best Match Hero Card */}
             <div className="lg:col-span-7 glass-panel rounded-2xl p-6 border-emerald-500/40 shadow-2xl flex flex-col justify-between">
               <div>

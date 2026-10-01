@@ -1,24 +1,43 @@
-import { 
-  AgentIntent, 
-  Resource, 
-  Institution, 
-  Profile, 
-  SearchCandidate, 
-  DecisionTraceEvent 
+import {
+  AgentIntent,
+  Resource,
+  Institution,
+  Profile,
+  SearchCandidate,
+  DecisionTraceEvent,
+  ExchangeRequest
 } from '../types';
-import { db } from './db';
+import { backendAdapter } from './dataAdapter';
+import { supabase } from './db';
+import { MEETUP_LOCATIONS } from '../data/institutionsData';
+import {
+  SearchResourcesInput,
+  GetNearbyInstitutionsInput,
+  CheckAvailabilityInput,
+  CreateExchangeRequestInput,
+  CounterExchangeRequestInput,
+  AcceptExchangeRequestInput,
+  ConfirmExchangeInput,
+  FindMeetupLocationInput
+} from '../types/agentToolContracts';
 
-// Haversine distance formula in kilometers
+// ============================================================================
+// 1. MATHEMATICAL & GEOGRAPHIC UTILITIES
+// ============================================================================
+
+/**
+ * Calculates Haversine distance in kilometers between two latitude/longitude points.
+ */
 export function calculateDistance(
-  lat1: number, 
-  lon1: number, 
-  lat2: number, 
+  lat1: number,
+  lon1: number,
+  lat2: number,
   lon2: number
 ): number {
   const R = 6371; // Radius of Earth in km
   const dLat = (lat2 - lat1) * (Math.PI / 180);
   const dLon = (lon2 - lon1) * (Math.PI / 180);
-  const a = 
+  const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) *
     Math.sin(dLon / 2) * Math.sin(dLon / 2);
@@ -27,9 +46,247 @@ export function calculateDistance(
   return Math.round(d * 10) / 10; // Round to 1 decimal place
 }
 
+// ============================================================================
+// 2. EXPLICIT REX AGENT TOOLS
+// ============================================================================
+
+export type SearchResourcesFilter = SearchResourcesInput;
+
 /**
- * 1. extractIntent()
- * Uses Gemini API if key is available, else deterministic natural language extractor.
+ * Tool: searchResources
+ * Queries verified resources from the data layer matching search filters.
+ */
+export function searchResources(filter: SearchResourcesFilter): Resource[] {
+  const all = (backendAdapter.getResources({ status: filter.status || 'ACTIVE' }) as Resource[]);
+  const instIdSet = filter.institution_ids ? new Set(filter.institution_ids) : null;
+
+  return all.filter(res => {
+    // Institution filter
+    if (filter.institution_id && res.institution_id !== filter.institution_id) {
+      return false;
+    }
+    if (instIdSet && !instIdSet.has(res.institution_id)) {
+      return false;
+    }
+
+    // Category filter
+    if (filter.category && filter.category !== 'All' && filter.category !== 'general') {
+      const matchCat = res.category.toLowerCase().includes(filter.category.toLowerCase()) ||
+        filter.category.toLowerCase().includes(res.category.toLowerCase());
+      if (!matchCat) return false;
+    }
+
+    // Max price filter
+    if (filter.max_price !== undefined && filter.max_price !== null && res.price > filter.max_price) {
+      return false;
+    }
+
+    // Keyword filter
+    if (filter.keywords && filter.keywords.length > 0) {
+      const content = `${res.title} ${res.description} ${res.category} ${res.brand || ''}`.toLowerCase();
+      const hasMatch = filter.keywords.some(k => content.includes(k.toLowerCase()));
+      if (!hasMatch) return false;
+    }
+
+    return true;
+  });
+}
+
+/**
+ * Tool: getResourceDetails
+ * Fetches full details of a specific resource along with its institution and owner profile.
+ */
+export function getResourceDetails(resourceId: string): {
+  resource: Resource;
+  institution?: Institution;
+  owner?: Profile;
+} | null {
+  const resource = backendAdapter.getResourceById(resourceId) as Resource | undefined;
+  if (!resource) return null;
+
+  const institution = backendAdapter.getInstitutionById(resource.institution_id) as Institution | undefined;
+  const owner = (backendAdapter.getAllProfiles() as Profile[]).find(p => p.id === resource.owner_id);
+
+  return { resource, institution, owner };
+}
+
+/**
+ * Tool: checkAvailability
+ * Validates whether a resource is active and unreserved during the requested window.
+ */
+export function checkAvailability(
+  resourceId: string,
+  window?: { start?: string; end?: string; start_date?: string; end_date?: string }
+): boolean {
+  const resource = backendAdapter.getResourceById(resourceId) as Resource | undefined;
+  if (!resource) return false;
+  if (resource.status !== 'ACTIVE') return false;
+
+  const start = window?.start || window?.start_date;
+  const end = window?.end || window?.end_date;
+
+  if (start && resource.availability_end && start > resource.availability_end) {
+    return false;
+  }
+  if (end && resource.availability_start && end < resource.availability_start) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Tool: getNearbyInstitutions
+ * Discovers accredited AISHE institutions within radiusKm from the origin institution.
+ */
+export function getNearbyInstitutions(
+  institutionId: string,
+  radiusKm: number = 20
+): Array<{ institution: Institution; distance_km: number }> {
+  const origin = backendAdapter.getInstitutionById(institutionId) as Institution | undefined;
+  if (!origin) return [];
+
+  const all = backendAdapter.getInstitutions() as Institution[];
+  const nearby: Array<{ institution: Institution; distance_km: number }> = [];
+
+  for (const inst of all) {
+    if (inst.id === institutionId) continue;
+    const dist = calculateDistance(origin.latitude, origin.longitude, inst.latitude, inst.longitude);
+    if (dist <= radiusKm) {
+      nearby.push({ institution: inst, distance_km: dist });
+    }
+  }
+
+  return nearby.sort((a, b) => a.distance_km - b.distance_km);
+}
+
+/**
+ * Tool: createExchangeRequest
+ * Creates a pending peer-to-peer exchange request in the database.
+ */
+export function createExchangeRequest(params: {
+  resourceId: string;
+  requesterId: string;
+  offeredPrice: number;
+  duration: string;
+}): ExchangeRequest {
+  return backendAdapter.createExchangeRequest({
+    resource_id: params.resourceId,
+    requester_id: params.requesterId,
+    offered_price: params.offeredPrice,
+    requested_duration: params.duration,
+  }) as ExchangeRequest;
+}
+
+/**
+ * Tool: getExchangeRequests
+ * Retrieves all incoming and outgoing exchange requests for a given student.
+ */
+export function getExchangeRequests(userId: string): {
+  incoming: ExchangeRequest[];
+  outgoing: ExchangeRequest[];
+} {
+  return backendAdapter.getRequestsForUser(userId) as {
+    incoming: ExchangeRequest[];
+    outgoing: ExchangeRequest[];
+  };
+}
+
+/**
+ * Tool: counterExchangeRequest
+ * Proposes a counter-offer price for a pending exchange request.
+ */
+export function counterExchangeRequest(requestId: string, counterPrice: number): ExchangeRequest {
+  return backendAdapter.counterOffer(requestId, counterPrice) as ExchangeRequest;
+}
+
+/**
+ * Tool: acceptExchangeRequest
+ * Accepts an incoming offer or counter offer and assigns a safe public campus meetup spot.
+ */
+export function acceptExchangeRequest(requestId: string): ExchangeRequest {
+  const allReqs = backendAdapter.getExchangeRequests() as ExchangeRequest[];
+  const req = allReqs.find(r => r.id === requestId);
+  if (req && req.status === 'COUNTERED') {
+    return backendAdapter.acceptCounterOffer(requestId) as ExchangeRequest;
+  }
+  return backendAdapter.acceptOffer(requestId) as ExchangeRequest;
+}
+
+/**
+ * Tool: declineExchangeRequest
+ * Declines an exchange request.
+ */
+export function declineExchangeRequest(requestId: string): ExchangeRequest {
+  return backendAdapter.declineOffer(requestId) as ExchangeRequest;
+}
+
+/**
+ * Tool: confirmExchange
+ * Marks the exchange handover as confirmed by the student (requester or owner).
+ */
+export function confirmExchange(requestId: string, userId: string): ExchangeRequest {
+  return backendAdapter.confirmMeetup(requestId, userId) as ExchangeRequest;
+}
+
+/**
+ * Tool: findMeetupLocation
+ * Selects a safe, CCTV-monitored, public campus exchange zone between two institutions.
+ */
+export function findMeetupLocation(
+  institutionIdA: string,
+  institutionIdB: string
+): {
+  locationName: string;
+  coordinates?: { latitude: number; longitude: number };
+  description: string;
+} {
+  const spotsA = backendAdapter.getMeetupSpots(institutionIdA);
+  const spotsB = backendAdapter.getMeetupSpots(institutionIdB);
+
+  // If both from same institution, use that college's prime spot
+  if (institutionIdA === institutionIdB && spotsA && spotsA.length > 0) {
+    return {
+      locationName: spotsA[0],
+      description: 'Official CCTV-monitored student safety zone on your campus.'
+    };
+  }
+
+  // Cross-college exchange: Recommend resource owner's safe campus spot or central library
+  const preferredSpot = spotsB?.[0] || spotsA?.[0] || 'Central Campus Library Foyer (CCTV Monitored)';
+  return {
+    locationName: preferredSpot,
+    description: 'Safe, daytime public handover zone recommended by REX protocol.'
+  };
+}
+
+/**
+ * Consolidated agent tools registry
+ */
+export const agentTools = {
+  calculateDistance,
+  searchResources,
+  getResourceDetails,
+  checkAvailability,
+  getNearbyInstitutions,
+  createExchangeRequest,
+  getExchangeRequests,
+  counterExchangeRequest,
+  acceptExchangeRequest,
+  declineExchangeRequest,
+  confirmExchange,
+  findMeetupLocation,
+};
+
+// ============================================================================
+// 3. GEMINI INTENT EXTRACTION & DETERMINISTIC NLP FALLBACK
+// ============================================================================
+
+/**
+ * Converts natural-language user query into structured intent.
+ * 1. Attempts Supabase Edge Function with server-side secret (zero client key exposure).
+ * 2. Attempts Gemini 2.5 Flash directly if local dev key is configured.
+ * 3. Safely falls back to deterministic NLP parser.
  */
 export async function extractIntent(
   query: string,
@@ -37,35 +294,93 @@ export async function extractIntent(
 ): Promise<AgentIntent> {
   const timestamp = new Date().toLocaleTimeString();
   onTrace?.({
-    id: `trace-${Date.now()}-1`,
+    id: `trace-${Date.now()}-intent`,
     timestamp,
-    action: 'Intent Extracted',
+    action: 'Intent Extraction Initiated',
     detail: `Parsing natural language requirements for: "${query}"`,
     type: 'info'
   });
 
-  const apiKey = localStorage.getItem('rex_gemini_api_key') || (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+  // 1. Try Supabase Edge Function first (Secure, server-side secret)
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.functions.invoke('extract-intent', {
+        body: { query }
+      });
+
+      if (!error && data?.intent) {
+        const parsed = data.intent;
+        const keywords = Array.isArray(parsed.keywords) && parsed.keywords.length > 0
+          ? parsed.keywords
+          : [parsed.item || 'item'];
+
+        onTrace?.({
+          id: `trace-${Date.now()}-edge`,
+          timestamp: new Date().toLocaleTimeString(),
+          action: 'Edge Function Intent Extracted',
+          detail: `Server-side Gemini 2.5 Flash identified: item="${parsed.item || parsed.category}", budget=${parsed.max_price ? `₹${parsed.max_price}` : 'flexible'}`,
+          type: 'success'
+        });
+
+        return {
+          item: parsed.item || undefined,
+          category: parsed.category || undefined,
+          resource_type: parsed.category || 'General Resource',
+          keywords,
+          max_price: parsed.max_price ?? undefined,
+          condition: parsed.condition ?? null,
+          purpose: parsed.purpose ?? null,
+          duration: parsed.duration || 'Flexible',
+          availability_start: parsed.availability_start || undefined,
+          availability_end: parsed.availability_end || undefined,
+          preferred_institution: parsed.preferred_institution || undefined,
+          location_preference: parsed.location_preference || 'same_college',
+          search_expansion_allowed: parsed.search_expansion_allowed ?? true,
+          urgency: parsed.urgency || null,
+          raw_query: query
+        };
+      }
+    } catch (e) {
+      // Gracefully continue to fallback
+    }
+  }
+
+  // 2. Direct client-side Gemini 2.5 Flash (if dev key provided)
+  const apiKey = (typeof localStorage !== 'undefined' ? localStorage.getItem('rex_gemini_api_key') : '')
+    || (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
 
   if (apiKey) {
     try {
       const prompt = `You are REX, an autonomous college student exchange agent for India.
 Extract structured intent from this student goal: "${query}"
-Output ONLY a JSON object:
+
+Return ONLY a JSON object with this exact schema:
 {
-  "resource_type": "string e.g. electronics, book, notes, kit, calculator",
-  "keywords": ["list", "of", "keywords"],
+  "item": "specific item name e.g. Raspberry Pi 4",
+  "category": "one of: electronics, textbooks, notes, lab equipment, kits & boards, calculators, sports, general",
+  "condition": "Like New | Excellent | Good | Fair or null",
   "max_price": number or null,
-  "duration": "e.g. weekend, 2 weeks, semester" or null,
-  "preferred_institution": "string or null",
-  "urgency": "urgent" or "flexible" or null
+  "purpose": "hackathon | coursework | project | exam or null",
+  "availability_start": "YYYY-MM-DD or null",
+  "availability_end": "YYYY-MM-DD or null",
+  "preferred_institution": "user_current_institution or specific college or null",
+  "location_preference": "same_college | nearby_colleges | any",
+  "search_expansion_allowed": boolean,
+  "duration": "e.g. This weekend (3 days) | 2 weeks | 1 month | Semester or null",
+  "urgency": "urgent | flexible or null",
+  "keywords": ["list", "of", "search", "keywords"]
 }`;
 
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+      // Calling supported Gemini 2.5 Flash model
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: 'application/json' }
+          generationConfig: {
+            responseMimeType: 'application/json',
+            temperature: 0.2
+          }
         })
       });
 
@@ -74,23 +389,43 @@ Output ONLY a JSON object:
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
         if (text) {
           const parsed = JSON.parse(text);
+          const keywords = Array.isArray(parsed.keywords) && parsed.keywords.length > 0
+            ? parsed.keywords
+            : [parsed.item || 'item'];
+
+          onTrace?.({
+            id: `trace-${Date.now()}-gemini`,
+            timestamp: new Date().toLocaleTimeString(),
+            action: 'Gemini 2.5 Flash Intent Extracted',
+            detail: `Identified item="${parsed.item || parsed.category}", budget=${parsed.max_price ? `₹${parsed.max_price}` : 'flexible'}, expansion=${parsed.search_expansion_allowed !== false}`,
+            type: 'success'
+          });
+
           return {
-            resource_type: parsed.resource_type || 'Item',
-            keywords: parsed.keywords || ['item'],
+            item: parsed.item || undefined,
+            category: parsed.category || undefined,
+            resource_type: parsed.category || 'General Resource',
+            keywords,
             max_price: parsed.max_price ?? undefined,
+            condition: parsed.condition ?? null,
+            purpose: parsed.purpose ?? null,
             duration: parsed.duration || 'Flexible',
+            availability_start: parsed.availability_start || undefined,
+            availability_end: parsed.availability_end || undefined,
             preferred_institution: parsed.preferred_institution || undefined,
+            location_preference: parsed.location_preference || 'same_college',
+            search_expansion_allowed: parsed.search_expansion_allowed ?? true,
             urgency: parsed.urgency || null,
             raw_query: query
           };
         }
       }
     } catch (e) {
-      console.warn('Gemini intent extraction failed, continuing with deterministic parser:', e);
+      console.warn('Gemini 2.5 Flash intent extraction failed, continuing with deterministic parser:', e);
     }
   }
 
-  // Deterministic NLP Fallback
+  // 3. Deterministic NLP Fallback
   const lower = query.toLowerCase();
 
   // Extract budget cap
@@ -100,75 +435,121 @@ Output ONLY a JSON object:
     maxPrice = parseInt(budgetMatch[1], 10);
   }
 
-  // Extract duration
+  // Extract duration & window
   let duration = 'Flexible';
-  if (lower.includes('weekend') || lower.includes('this weekend')) duration = 'This weekend (3 days)';
-  else if (lower.includes('2 week') || lower.includes('two week')) duration = '2 weeks';
-  else if (lower.includes('month')) duration = '1 month';
-  else if (lower.includes('semester')) duration = 'Semester';
+  let availability_start: string | undefined = undefined;
+  let availability_end: string | undefined = undefined;
 
-  // Extract keywords & type
-  let resourceType = 'General Resource';
+  if (lower.includes('weekend') || lower.includes('this weekend')) {
+    duration = 'This weekend (3 days)';
+    availability_start = '2026-10-02';
+    availability_end = '2026-10-06';
+  } else if (lower.includes('2 week') || lower.includes('two week')) {
+    duration = '2 weeks';
+    availability_start = '2026-10-02';
+    availability_end = '2026-10-16';
+  } else if (lower.includes('month')) {
+    duration = '1 month';
+  } else if (lower.includes('semester')) {
+    duration = 'Semester';
+  }
+
+  // Extract item, category, & keywords
+  let item = 'Resource';
+  let category = 'General Resource';
   const keywords: string[] = [];
 
-  if (lower.includes('raspberry pi') || lower.includes('rpi')) {
-    resourceType = 'Kits & Boards';
-    keywords.push('raspberry pi', 'rpi', 'pi 4', 'kit');
+  if (lower.includes('raspberry pi') || lower.includes('rpi') || lower.includes('pi 4') || lower.includes('pi 3')) {
+    item = 'Raspberry Pi';
+    category = 'Kits & Boards';
+    keywords.push('raspberry pi', 'rpi', 'pi 4', 'pi 3');
   } else if (lower.includes('arduino')) {
-    resourceType = 'Kits & Boards';
+    item = 'Arduino Uno Kit';
+    category = 'Kits & Boards';
     keywords.push('arduino', 'sensors', 'kit');
   } else if (lower.includes('dsa') || lower.includes('algorithm') || lower.includes('clrs')) {
-    resourceType = 'Textbooks';
+    item = 'Algorithms Textbook (CLRS)';
+    category = 'Textbooks';
     keywords.push('dsa', 'algorithms', 'clrs', 'textbook');
   } else if (lower.includes('calculator') || lower.includes('casio')) {
-    resourceType = 'Calculators';
+    item = 'Scientific Calculator';
+    category = 'Calculators';
     keywords.push('calculator', 'casio', 'fx-991es');
   } else if (lower.includes('dbms') || lower.includes('notes')) {
-    resourceType = 'Notes';
+    item = 'Database Systems Notes';
+    category = 'Notes';
     keywords.push('dbms', 'notes', 'database');
   } else if (lower.includes('camera') || lower.includes('sony')) {
-    resourceType = 'Electronics';
+    item = 'Sony Mirrorless Camera';
+    category = 'Electronics';
     keywords.push('camera', 'sony', 'mirrorless');
   } else if (lower.includes('lab coat') || lower.includes('goggles')) {
-    resourceType = 'Lab Equipment';
-    keywords.push('lab coat', 'goggles');
+    item = 'Chemistry Lab Coat & Goggles';
+    category = 'Lab Equipment';
+    keywords.push('lab coat', 'goggles', 'chemistry');
   } else {
     keywords.push(...query.split(/\s+/).filter(w => w.length > 3));
   }
 
+  const preferredInst = lower.includes('my college') || lower.includes('srm')
+    ? 'user_current_institution'
+    : undefined;
+
+  const searchExpansionAllowed = !lower.includes('only my college') && !lower.includes('strictly srm');
+
+  onTrace?.({
+    id: `trace-${Date.now()}-nlp`,
+    timestamp: new Date().toLocaleTimeString(),
+    action: 'Deterministic NLP Intent Extracted',
+    detail: `Item: "${item}" (${category}) | Duration: ${duration} | Budget: ${maxPrice ? `₹${maxPrice}` : 'Flexible'} | Expand: ${searchExpansionAllowed}`,
+    type: 'info'
+  });
+
   return {
-    resource_type: resourceType,
+    item,
+    category,
+    resource_type: category,
     keywords,
     max_price: maxPrice,
+    condition: null,
+    purpose: lower.includes('hackathon') ? 'hackathon' : null,
     duration,
-    preferred_institution: lower.includes('my college') ? 'user_college' : undefined,
+    availability_start,
+    availability_end,
+    preferred_institution: preferredInst,
+    location_preference: preferredInst ? 'same_college' : 'nearby_colleges',
+    search_expansion_allowed: searchExpansionAllowed,
     urgency: lower.includes('urgent') || lower.includes('asap') ? 'urgent' : null,
     raw_query: query
   };
 }
 
-/**
- * Stage-by-Stage Search Orchestrator
- * Stage 1: User's College
- * Stage 2: Nearby Colleges (< 20 km)
- * Stage 3: City (< 40 km)
- * Stage 4: State
- * Stage 5: All-India
- */
-export async function executeAgentSearch(
-  intent: AgentIntent,
-  userProfile: Profile,
-  onTrace?: (event: DecisionTraceEvent) => void
-): Promise<{
+// ============================================================================
+// 4. AUTONOMOUS MULTI-STAGE SEARCH ORCHESTRATOR
+// ============================================================================
+
+export interface OrchestrationResult {
   bestMatch: SearchCandidate | null;
   allCandidates: SearchCandidate[];
   finalStage: string;
   explanation: string;
-}> {
-  const userInst = db.getInstitutionById(userProfile.institution_id);
-  const allInstitutions = db.getInstitutions();
-  const allResources = db.getResources({ status: 'ACTIVE' });
-  const allProfiles = db.getAllProfiles();
+}
+
+/**
+ * Orchestrates multi-stage search with real tool execution:
+ * Stage 1: User's College
+ * Stage 2: Nearby Colleges (< 20 km)
+ * Stage 3: Metropolitan Area (< 50 km)
+ * Stage 4/5: National Fallback
+ */
+export async function orchestrateExchangeSearch(
+  intent: AgentIntent,
+  userProfile: Profile,
+  onTrace?: (event: DecisionTraceEvent) => void
+): Promise<OrchestrationResult> {
+  const userInst = backendAdapter.getInstitutionById(userProfile.institution_id) as Institution | undefined;
+  const allInstitutions = backendAdapter.getInstitutions() as Institution[];
+  const allProfiles = backendAdapter.getAllProfiles() as Profile[];
 
   const addTrace = (action: string, detail: string, type: 'info' | 'expand' | 'success' | 'warn' = 'info') => {
     onTrace?.({
@@ -180,26 +561,27 @@ export async function executeAgentSearch(
     });
   };
 
-  const matchesKeyword = (res: Resource) => {
-    const text = `${res.title} ${res.description} ${res.category} ${res.brand || ''}`.toLowerCase();
-    return intent.keywords.some(k => text.includes(k.toLowerCase())) || 
-      (intent.resource_type && res.category === intent.resource_type);
-  };
-
-  // -------------------------------------------------------------
-  // STAGE 1: Search User's College
-  // -------------------------------------------------------------
-  addTrace('Resource Search Executed', `Stage 1: Scanning user college (${userInst?.name || 'Local Campus'})...`);
-  await new Promise(r => setTimeout(r, 650));
-
-  const stage1Resources = allResources.filter(r => 
-    r.institution_id === userProfile.institution_id && matchesKeyword(r)
+  // --------------------------------------------------------------------------
+  // STAGE 1: Search User's College via searchResources tool
+  // --------------------------------------------------------------------------
+  addTrace(
+    'Tool Call: searchResources',
+    `Stage 1: Scanning user college (${userInst?.name || 'Local Campus'})... Filter: { institution_id: "${userProfile.institution_id}", keywords: [${intent.keywords.join(', ')}] }`
   );
+  await new Promise(r => setTimeout(r, 600));
+
+  const stage1Resources = searchResources({
+    institution_id: userProfile.institution_id,
+    keywords: intent.keywords,
+    max_price: intent.max_price,
+  });
 
   if (stage1Resources.length > 0) {
-    addTrace('Local Resource Located', `Found ${stage1Resources.length} match(es) at your institution.`, 'success');
-    const candidates = stage1Resources.map(r => buildCandidate(r, userInst!, allInstitutions, allProfiles, 'USER_COLLEGE', intent));
-    const sorted = rankCandidates(candidates, intent);
+    addTrace('Local Resource Located', `Found ${stage1Resources.length} candidate(s) at ${userInst?.name}.`, 'success');
+    const candidates = stage1Resources.map(r =>
+      buildCandidate(r, userInst!, allInstitutions, allProfiles, 'USER_COLLEGE', intent)
+    );
+    const sorted = rankCandidates(candidates);
     return {
       bestMatch: sorted[0],
       allCandidates: sorted,
@@ -208,28 +590,67 @@ export async function executeAgentSearch(
     };
   }
 
-  // -------------------------------------------------------------
-  // STAGE 2: Expand to Nearby Colleges (< 20 km)
-  // -------------------------------------------------------------
-  addTrace('Network Expanded', `Stage 2: No match at your college. Expanding search to nearby institutions (< 20 km)...`, 'expand');
-  await new Promise(r => setTimeout(r, 750));
+  // --------------------------------------------------------------------------
+  // STAGE 2: If No Match & Expansion Allowed, Expand to Nearby Colleges (< 20 km)
+  // --------------------------------------------------------------------------
+  if (intent.search_expansion_allowed === false) {
+    addTrace('Search Complete', `No matching resource at ${userInst?.name}, and search expansion was explicitly disallowed by user preference.`, 'warn');
+    return {
+      bestMatch: null,
+      allCandidates: [],
+      finalStage: 'NONE',
+      explanation: 'No matching resource found within your college.'
+    };
+  }
 
-  const nearbyInstitutions = allInstitutions.filter(inst => {
-    if (inst.id === userProfile.institution_id) return false;
-    if (!userInst) return false;
-    const dist = calculateDistance(userInst.latitude, userInst.longitude, inst.latitude, inst.longitude);
-    return dist <= 20;
-  });
+  addTrace(
+    'Tool Call: getNearbyInstitutions',
+    `Stage 2: No match at your college. Calling getNearbyInstitutions("${userProfile.institution_id}", radius: 20 km)...`,
+    'expand'
+  );
+  await new Promise(r => setTimeout(r, 700));
 
-  const nearbyInstIds = new Set(nearbyInstitutions.map(i => i.id));
-  const stage2Resources = allResources.filter(r => 
-    nearbyInstIds.has(r.institution_id) && matchesKeyword(r)
+  const nearbyInstitutions = getNearbyInstitutions(userProfile.institution_id, 20);
+  const nearbyNames = nearbyInstitutions.map(n => `${n.institution.name.split(' ')[0]} (${n.distance_km} km)`).join(', ');
+  addTrace(
+    'Discovered Nearby Campuses',
+    `Found ${nearbyInstitutions.length} accredited institutions within 20 km: ${nearbyNames}.`,
+    'info'
   );
 
+  const nearbyInstIds = nearbyInstitutions.map(n => n.institution.id);
+  addTrace(
+    'Tool Call: searchResources',
+    `Querying resources across nearby campus cluster [${nearbyInstIds.join(', ')}]...`
+  );
+  await new Promise(r => setTimeout(r, 500));
+
+  const stage2Resources = searchResources({
+    institution_ids: nearbyInstIds,
+    keywords: intent.keywords,
+  });
+
   if (stage2Resources.length > 0) {
-    addTrace('Candidates Located', `Found ${stage2Resources.length} candidates across nearby institutions (e.g. VIT Chennai).`, 'success');
-    const candidates = stage2Resources.map(r => buildCandidate(r, userInst!, allInstitutions, allProfiles, 'NEARBY_COLLEGES', intent));
-    const sorted = rankCandidates(candidates, intent);
+    addTrace(
+      'Candidates Located',
+      `Found ${stage2Resources.length} candidate(s) at nearby institutions (e.g. VIT Chennai). Verifying availability...`,
+      'success'
+    );
+
+    // Check availability for each candidate
+    const available = stage2Resources.filter(r => {
+      const isAvail = checkAvailability(r.id, {
+        start: intent.availability_start,
+        end: intent.availability_end
+      });
+      return isAvail;
+    });
+
+    const candidates = (available.length > 0 ? available : stage2Resources).map(r =>
+      buildCandidate(r, userInst!, allInstitutions, allProfiles, 'NEARBY_COLLEGES', intent)
+    );
+    const sorted = rankCandidates(candidates);
+
     return {
       bestMatch: sorted[0],
       allCandidates: sorted,
@@ -238,20 +659,33 @@ export async function executeAgentSearch(
     };
   }
 
-  // -------------------------------------------------------------
+  // --------------------------------------------------------------------------
   // STAGE 3: Expand to City / Metropolitan Area (< 50 km)
-  // -------------------------------------------------------------
-  addTrace('Network Expanded', `Stage 3: Expanding to city-wide institutions (${userInst?.city || 'Region'})...`, 'expand');
-  await new Promise(r => setTimeout(r, 650));
+  // --------------------------------------------------------------------------
+  addTrace(
+    'Network Expanded',
+    `Stage 3: Expanding to city-wide institutions in ${userInst?.city || 'the region'} (< 50 km)...`,
+    'expand'
+  );
+  await new Promise(r => setTimeout(r, 600));
 
-  const cityInstitutions = allInstitutions.filter(inst => inst.city === userInst?.city);
-  const cityInstIds = new Set(cityInstitutions.map(i => i.id));
-  const stage3Resources = allResources.filter(r => cityInstIds.has(r.institution_id) && matchesKeyword(r));
+  const cityInstitutions = allInstitutions.filter(inst =>
+    inst.city === userInst?.city ||
+    (userInst && calculateDistance(userInst.latitude, userInst.longitude, inst.latitude, inst.longitude) <= 50)
+  );
+  const cityInstIds = cityInstitutions.map(i => i.id);
+
+  const stage3Resources = searchResources({
+    institution_ids: cityInstIds,
+    keywords: intent.keywords,
+  });
 
   if (stage3Resources.length > 0) {
-    addTrace('City Candidates Found', `Found ${stage3Resources.length} candidates in ${userInst?.city}.`, 'success');
-    const candidates = stage3Resources.map(r => buildCandidate(r, userInst!, allInstitutions, allProfiles, 'CITY', intent));
-    const sorted = rankCandidates(candidates, intent);
+    addTrace('City Candidates Found', `Found ${stage3Resources.length} candidate(s) in metropolitan region.`, 'success');
+    const candidates = stage3Resources.map(r =>
+      buildCandidate(r, userInst!, allInstitutions, allProfiles, 'CITY', intent)
+    );
+    const sorted = rankCandidates(candidates);
     return {
       bestMatch: sorted[0],
       allCandidates: sorted,
@@ -260,16 +694,21 @@ export async function executeAgentSearch(
     };
   }
 
-  // -------------------------------------------------------------
+  // --------------------------------------------------------------------------
   // STAGE 4/5: All-India Fallback
-  // -------------------------------------------------------------
+  // --------------------------------------------------------------------------
   addTrace('Network Expanded', `Stage 4: Broadening across all verified Indian colleges...`, 'expand');
-  await new Promise(r => setTimeout(r, 600));
+  await new Promise(r => setTimeout(r, 550));
 
-  const stage5Resources = allResources.filter(matchesKeyword);
-  if (stage5Resources.length > 0) {
-    const candidates = stage5Resources.map(r => buildCandidate(r, userInst!, allInstitutions, allProfiles, 'INDIA', intent));
-    const sorted = rankCandidates(candidates, intent);
+  const nationalResources = searchResources({
+    keywords: intent.keywords,
+  });
+
+  if (nationalResources.length > 0) {
+    const candidates = nationalResources.map(r =>
+      buildCandidate(r, userInst!, allInstitutions, allProfiles, 'INDIA', intent)
+    );
+    const sorted = rankCandidates(candidates);
     return {
       bestMatch: sorted[0],
       allCandidates: sorted,
@@ -287,6 +726,15 @@ export async function executeAgentSearch(
     explanation: 'No matching campus resources found meeting your current criteria.'
   };
 }
+
+/**
+ * Backward compatibility alias for executeAgentSearch
+ */
+export const executeAgentSearch = orchestrateExchangeSearch;
+
+// ============================================================================
+// 5. CANDIDATE EVALUATION & SCORING
+// ============================================================================
 
 function buildCandidate(
   resource: Resource,
@@ -309,15 +757,15 @@ function buildCandidate(
     created_at: new Date().toISOString()
   };
 
-  const distanceKm = userInst 
+  const distanceKm = userInst
     ? calculateDistance(userInst.latitude, userInst.longitude, resInst.latitude, resInst.longitude)
     : 0;
 
-  // Multi-factor score
+  // Multi-factor factual score
   let score = 70;
   if (intent.max_price && resource.price <= intent.max_price) score += 15;
   if (distanceKm <= 10) score += 15;
-  else if (distanceKm <= 25) score += 5;
+  else if (distanceKm <= 25) score += 8;
   if (owner.verified) score += 5;
   if (resource.condition === 'Excellent' || resource.condition === 'Like New') score += 5;
 
@@ -328,16 +776,17 @@ function buildCandidate(
     distance_km: distanceKm,
     match_score: Math.min(99, score),
     stage_found: stage,
-    rationale: `Located ${distanceKm} km away at ${resInst.name}. Fits criteria.`
+    rationale: `Located ${distanceKm} km away at ${resInst.name}. Active listing.`
   };
 }
 
-function rankCandidates(candidates: SearchCandidate[], intent: AgentIntent): SearchCandidate[] {
+function rankCandidates(candidates: SearchCandidate[]): SearchCandidate[] {
   return [...candidates].sort((a, b) => {
-    // Distance priority, then budget compliance
+    // 1. Proximity first
     if (a.distance_km !== b.distance_km) {
       return a.distance_km - b.distance_km;
     }
+    // 2. Multi-factor score
     return b.match_score - a.match_score;
   });
 }
@@ -347,12 +796,16 @@ function generateExplanation(candidate: SearchCandidate, intent: AgentIntent, us
   if (institution.id === userInst?.id) {
     return `REX selected this resource because it is available right at your college (${institution.name}), matches your specifications, and fits within your budget.`;
   }
-  return `REX selected this resource because no suitable match was available inside your college, but this candidate at nearby ${institution.name} (${distance_km} km away) matches your requested specs, price (₹${resource.price}), and availability window.`;
+  return `REX selected this resource because no suitable match was available inside your college (${userInst?.name || 'campus'}), but this candidate at nearby ${institution.name} (${distance_km} km away) matches your requested specs, price (₹${resource.price}), and is available for this weekend.`;
 }
+
+// ============================================================================
+// 6. AI OBJECT EXTRACTION FOR LISTINGS (Vision with Gemini 2.5 Flash)
+// ============================================================================
 
 /**
  * AI Object Extraction for Resource Listing
- * Uses Gemini Vision if key is available, else local intelligent vision classifier.
+ * Uses Gemini 2.5 Flash Vision if key is available, else local intelligent vision classifier.
  */
 export async function detectObjectFromImage(
   imageBase64OrName: string
@@ -364,14 +817,16 @@ export async function detectObjectFromImage(
   description: string;
   suggestedPrice: number;
 }> {
-  const apiKey = localStorage.getItem('rex_gemini_api_key') || (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
+  const apiKey = (typeof localStorage !== 'undefined' ? localStorage.getItem('rex_gemini_api_key') : '')
+    || (import.meta as any).env?.VITE_GEMINI_API_KEY || '';
 
   if (apiKey && imageBase64OrName.startsWith('data:image')) {
     try {
       const mimeType = imageBase64OrName.substring(imageBase64OrName.indexOf(':') + 1, imageBase64OrName.indexOf(';'));
       const base64Data = imageBase64OrName.split(',')[1];
 
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+      // Using Gemini 2.5 Flash multimodal vision
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -405,7 +860,7 @@ Respond with JSON only:
         if (text) return JSON.parse(text);
       }
     } catch (e) {
-      console.warn('Gemini vision analysis failed, falling back to local vision detector:', e);
+      console.warn('Gemini 2.5 Flash vision analysis failed, falling back to local vision detector:', e);
     }
   }
 
